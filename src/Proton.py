@@ -144,7 +144,7 @@ def respond(voice_data):
             reply('Launched Successfully')
 
     elif ('stop gesture recognition' in voice_data) or ('top gesture recognition' in voice_data):
-        if Gesture_Controller.GestureController.gc_mode:press
+        if Gesture_Controller.GestureController.gc_mode:
             Gesture_Controller.GestureController.gc_mode = 0
             reply('Gesture recognition stopped')
         else:
@@ -152,7 +152,7 @@ def respond(voice_data):
         
     elif 'copy' in voice_data:
         with keyboard.pressed(Key.ctrl):
-            keyboard.('c')
+            keyboard.press('c')
             keyboard.release('c')
         reply('Copied')
           
