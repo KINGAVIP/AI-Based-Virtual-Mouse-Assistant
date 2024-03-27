@@ -17,24 +17,24 @@ class ChatBot:
         # if not websockets:
         #     print('Bye!')
         exit()
-
+    @staticmethod
     @eel.expose
     def getUserInput(msg):
         ChatBot.userinputQueue.put(msg)
         print(msg)
-    
+    @staticmethod
     def close():
         ChatBot.started = False
-    
+    @staticmethod
     def addUserMsg(msg):
         eel.addUserMsg(msg)
-    
+    @staticmethod
     def addAppMsg(msg):
         eel.addAppMsg(msg)
-
+    @staticmethod
     def start():
         path = os.path.dirname(os.path.abspath(__file__))
-        eel.init(path + r'\web', allowed_extensions=['.js', '.html'])
+        eel.init(path + r'/web', allowed_extensions=['.js', '.html'])
         try:
             eel.start('index.html', mode='chrome',
                                     host='localhost',
@@ -53,4 +53,4 @@ class ChatBot:
                     break
         
         except:
-            pass
+            print("not working")

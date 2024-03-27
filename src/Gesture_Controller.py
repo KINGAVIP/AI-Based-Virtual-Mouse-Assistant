@@ -1,20 +1,16 @@
 # Imports
-
 import cv2
 import mediapipe as mp
-import pyautogui
 import math
 from enum import IntEnum
-from ctypes import cast, POINTER
-from comtypes import CLSCTX_ALL
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+import pyautogui
 from google.protobuf.json_format import MessageToDict
-import screen_brightness_control as sbcontrol
-
+import subprocess
 pyautogui.FAILSAFE = False
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
-
+import pulsectl
+import screen_brightness_control as sbcontrol
 # Gesture Encodings 
 class Gest(IntEnum):
     # Binary Encoded
@@ -98,7 +94,7 @@ class HandRecog:
             try:
                 ratio = round(dist/dist2,1)
             except:
-                ratio = round(dist1/0.01,1)
+                ratio = round(dist/0.01,1)
 
             self.finger = self.finger << 1
             if ratio > 0.5 :
@@ -147,9 +143,6 @@ class HandRecog:
 
 # Executes commands according to detected gestures
 class Controller:
-    tx_old = 0
-    ty_old = 0
-    trial = True
     flag = False
     grabflag = False
     pinchmajorflag = False
@@ -174,44 +167,49 @@ class Controller:
         return dist
     
     def changesystembrightness():
-        """sets system brightness based on 'Controller.pinchlv'."""
-        currentBrightnessLv = sbcontrol.get_brightness(display=0)/100.0
-        currentBrightnessLv += Controller.pinchlv/50.0
-        if currentBrightnessLv > 1.0:
-            currentBrightnessLv = 1.0
-        elif currentBrightnessLv < 0.0:
-            currentBrightnessLv = 0.0       
-        sbcontrol.fade_brightness(int(100*currentBrightnessLv) , start = sbcontrol.get_brightness(display=0))
+        try:
+            current_brightness=int(subprocess.check_output("xbacklight -get",shell=True))
+            current_brightness+=Controller.pinchlv/50.0
+            current_brightness=min(max(current_brightness,0),100)
+            subprocess.run(f"xbacklight -set {current_brightness}",shell=True)
+        except:
+            print("Brightness not working for linux due to some issue")
     
+    @staticmethod
     def changesystemvolume():
-        """sets system volume based on 'Controller.pinchlv'."""
-        devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        volume = cast(interface, POINTER(IAudioEndpointVolume))
-        currentVolumeLv = volume.GetMasterVolumeLevelScalar()
-        currentVolumeLv += Controller.pinchlv/50.0
-        if currentVolumeLv > 1.0:
-            currentVolumeLv = 1.0
-        elif currentVolumeLv < 0.0:
-            currentVolumeLv = 0.0
-        volume.SetMasterVolumeLevelScalar(currentVolumeLv, None)
+        with pulsectl.Pulse('my-project') as pulse:
+            sink=pulse.sink_list()[0]
+            current_volume=sink.volume.value_flat+Controller.pinchlv/50.0
+            current_volume=max(0.0,min(1.0,current_volume))
+            pulse.volume_set_all_chans(sink,current_volume)
+
     
+    @staticmethod
     def scrollVertical():
-        """scrolls on screen vertically."""
-        pyautogui.scroll(120 if Controller.pinchlv>0.0 else -120)
-        
-    
+        """Scrolls on screen vertically."""
+        distance = 120 if Controller.pinchlv > 0.0 else -120
+        pyautogui.scroll(distance)
+
+    @staticmethod
     def scrollHorizontal():
-        """scrolls on screen horizontally."""
-        pyautogui.keyDown('shift')
-        pyautogui.keyDown('ctrl')
-        pyautogui.scroll(-120 if Controller.pinchlv>0.0 else 120)
-        pyautogui.keyUp('ctrl')
-        pyautogui.keyUp('shift')
+        """Scrolls on screen horizontally."""
+        distance = -120 if Controller.pinchlv > 0.0 else 120
+        pyautogui.hscroll(distance)
 
     # Locate Hand to get Cursor Position
     # Stabilize cursor by Dampening
+    
     def get_position(hand_result):
+        """
+        returns coordinates of current hand position.
+
+        Locates hand to get cursor position also stabilize cursor by 
+        dampening jerky motion of hand.
+
+        Returns
+        -------
+        tuple(float, float)
+        """
         point = 9
         position = [hand_result.landmark[point].x ,hand_result.landmark[point].y]
         sx,sy = pyautogui.size()
@@ -246,7 +244,23 @@ class Controller:
 
     # Hold final position for 5 frames to change status
     def pinch_control(hand_result, controlHorizontal, controlVertical):
-      
+        """
+        calls 'controlHorizontal' or 'controlVertical' based on pinch flags, 
+        'framecount' and sets 'pinchlv'.
+
+        Parameters
+        ----------
+        hand_result : Object
+            Landmarks obtained from mediapipe.
+        controlHorizontal : callback function assosiated with horizontal
+            pinch gesture.
+        controlVertical : callback function assosiated with vertical
+            pinch gesture. 
+        
+        Returns
+        -------
+        None
+        """
         if Controller.framecount == 5:
             Controller.framecount = 0
             Controller.pinchlv = Controller.prevpinchlv
@@ -330,10 +344,34 @@ class Controller:
         
 '''
 ----------------------------------------  Main Class  ----------------------------------------
+    Entry point of Gesture Controller
 '''
 
 
 class GestureController:
+    """
+    Handles camera, obtain landmarks from mediapipe, entry point
+    for whole program.
+
+    Attributes
+    ----------
+    gc_mode : int
+        indicates weather gesture controller is running or not,
+        1 if running, otherwise 0.
+    cap : Object
+        object obtained from cv2, for capturing video frame.
+    CAM_HEIGHT : int
+        highet in pixels of obtained frame from camera.
+    CAM_WIDTH : int
+        width in pixels of obtained frame from camera.
+    hr_major : Object of 'HandRecog'
+        object representing major hand.
+    hr_minor : Object of 'HandRecog'
+        object representing minor hand.
+    dom_hand : bool
+        True if right hand is domaniant hand, otherwise False.
+        default True.
+    """
     gc_mode = 0
     cap = None
     CAM_HEIGHT = None
@@ -350,6 +388,11 @@ class GestureController:
         GestureController.CAM_WIDTH = GestureController.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     
     def classify_hands(results):
+        """
+        sets 'hr_major', 'hr_minor' based on classification(left, right) of 
+        hand obtained from mediapipe, uses 'dom_hand' to decide major and
+        minor hand.
+        """
         left , right = None,None
         try:
             handedness_dict = MessageToDict(results.multi_handedness[0])
@@ -377,6 +420,11 @@ class GestureController:
             GestureController.hr_minor = right
 
     def start(self):
+        """
+        Entry point of whole programm, caputres video frame and passes, obtains
+        landmark from mediapipe and passes it to 'handmajor' and 'handminor' for
+        controlling.
+        """
         
         handmajor = HandRecog(HLabel.MAJOR)
         handminor = HandRecog(HLabel.MINOR)
@@ -420,3 +468,8 @@ class GestureController:
                     break
         GestureController.cap.release()
         cv2.destroyAllWindows()
+
+# uncomment to run directly
+# gc1 = GestureController()
+# gc1.start()
+
